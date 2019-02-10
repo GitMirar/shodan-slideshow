@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/mitchellh/go-vnc"
 	"gopkg.in/ns3777k/go-shodan.v3/shodan"
 	"image"
@@ -79,7 +78,7 @@ func main() {
 	logfile := flag.String("logfile", "slideshow.log", "logfile location")
 	flag.Parse()
 
-	f, err := os.OpenFile(*logfile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+	f, err := os.OpenFile(*logfile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		log.Fatalf("error opening logfile: %v", err)
 	}
@@ -87,8 +86,6 @@ func main() {
 	log.SetOutput(f)
 
 	client := shodan.NewEnvClient(nil)
-
-	client.SetDebug(true)
 
 	ports := []int{5901}
 	chBanner := make(chan *shodan.HostData)
@@ -111,11 +108,7 @@ func main() {
 			log.Fatalln("channel closed")
 		}
 		ip := banner.IP.String()
-		uuid, err := uuid.NewRandom()
-		if err != nil {
-			log.Panic(err)
-		}
-		imgname := fmt.Sprintf("%d_%s.png", time.Now().Unix(), uuid.String())
+		imgname := fmt.Sprintf("%d_%s.png", time.Now().UnixNano(), ip)
 		filepath := path.Join(*dumpdir, imgname)
 		err = screenCapture(ip, 5901, filepath)
 		if err != nil {
