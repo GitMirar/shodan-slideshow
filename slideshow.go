@@ -22,13 +22,36 @@ const timeout = 10
 
 func screenCapture(host string, port int, filename string) (err error) {
 	address := fmt.Sprintf("%s:%d", host, port)
-	nc, err := net.Dial("tcp", address)
-	if err != nil {
-		return err
+	var nc net.Conn
+
+	ch := make(chan vnc.ServerMessage)
+	clientConDone := make(chan bool)
+	var clientCon *vnc.ClientConn
+	go func() {
+		nc, err = net.Dial("tcp", address)
+		if err != nil {
+			close(clientConDone)
+			return
+		}
+
+		clientCon, err = vnc.Client(nc, &vnc.ClientConfig{
+			Exclusive:       false,
+			ServerMessageCh: ch,
+			ServerMessages:  []vnc.ServerMessage{new(vnc.FramebufferUpdateMessage)},
+		})
+		close(clientConDone)
+	}()
+
+	select {
+	case <-clientConDone:
+	case <-time.After(timeout * time.Second):
+		return errors.New("timeout")
 	}
 	defer nc.Close()
 
-	ch := make(chan vnc.ServerMessage)
+	if err != nil {
+		return err
+	}
 
 	c, err := vnc.Client(nc, &vnc.ClientConfig{
 		Exclusive:       false,
@@ -62,7 +85,6 @@ func screenCapture(host string, port int, filename string) (err error) {
 	}
 
 	rects := msg.(*vnc.FramebufferUpdateMessage).Rectangles
-	fmt.Println()
 
 	w := int(rects[0].Width)
 	h := int(rects[0].Height)
@@ -83,7 +105,6 @@ func screenCapture(host string, port int, filename string) (err error) {
 		i++
 	}
 
-	// Save to out.png
 	f, _ := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0600)
 	defer f.Close()
 	png.Encode(f, img)
@@ -143,5 +164,6 @@ func main() {
 
 		go screenCaptureHosts(hosts.Matches, dumpdir, &group)
 	}
+	log.Printf("INFO: started with %d threads", *pages)
 	group.Wait()
 }
